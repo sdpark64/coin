@@ -299,71 +299,78 @@ def close_all_positions(reason="Time End"):
 # ===============================================================
 # [메인 루프] - 핵심 수정 부분
 # ===============================================================
+# ===============================================================
+# [메인 루프] - 재실행 시 대기 로직 최적화
+# ===============================================================
 def main():
     set_leverage_all()
     threading.Thread(target=telegram_listener, daemon=True).start()
     
-    telegram_notifier.send_telegram_message("🤖 <b>봇 재가동</b> 상태를 동기화합니다...")
-    update_targets(is_restart=True)
+    telegram_notifier.send_telegram_message("🤖 <b>봇 재가동</b> 시간 동기화 중...")
 
+    # [1] 현재 시간 체크
     now_utc = datetime.datetime.now(timezone.utc)
     is_break_time = False
     
-    # 시작 시 휴식 시간인지 체크 (11:50~12:00 / 23:50~00:00)
+    # 11:50~11:59 또는 23:50~23:59 인지 확인
     if now_utc.minute >= 50 and (now_utc.hour % 12 == 11):
         is_break_time = True
-        
+
+    # [2] 분기 처리
     if is_break_time:
-        # [중요] 시작하자마자 휴식 시간이라면 슬롯 마킹
+        # (A) 휴식 시간에 켜졌다면: 아무것도 안 하고 청산 후 대기
         bot_state["last_close_slot"] = f"{now_utc.date()}_{now_utc.hour}"
         
         next_start = get_next_start_time()
         next_kst = next_start + datetime.timedelta(hours=9)
-        msg = f"💤 <b>[휴식 시간]</b> 다음 시작 시간(KST {next_kst.strftime('%H:%M')})까지 대기합니다."
+        
+        msg = f"💤 <b>[휴식 시간 재시작]</b> 마감 임박({now_utc.strftime('%H:%M')})으로 인해 매매를 쉬고,\n"
+        msg += f"다음 시작 시간(KST {next_kst.strftime('%H:%M')})까지 대기합니다."
         telegram_notifier.send_telegram_message(msg)
         
+        # 혹시 들고 있을 포지션 정리
         close_all_positions(reason="Restart inside Break Time")
         
+        # 12:00 / 00:00 될 때까지 무한 대기
         while datetime.datetime.now(timezone.utc) < next_start:
             time.sleep(1)
             
-        time.sleep(5) 
-        telegram_notifier.send_telegram_message("🚀 <b>타임프레임 시작!</b>")
+        time.sleep(5) # 캔들 생성 대기
+        telegram_notifier.send_telegram_message("🚀 <b>새로운 타임프레임 시작!</b>")
         update_targets(is_restart=False)
 
     else:
+        # (B) 매매 시간에 켜졌다면: 즉시 복구 및 매매 재개
+        update_targets(is_restart=True)
         telegram_notifier.send_telegram_message("✅ <b>[매매 재개]</b> 기존 포지션이 있다면 유지하고, 신규 진입을 감시합니다.")
     
+    # [3] 메인 감시 루프 진입
     while True:
         try:
             now_utc = datetime.datetime.now(timezone.utc)
             
-            # [수정] 50분 '이상'이면 휴식 시간 로직으로 진입 (== 50 으로 하면 51분 등에 뚫림)
+            # 50분 ~ 59분 사이: 휴식 및 청산 로직
             if now_utc.minute >= 50 and (now_utc.hour == 11 or now_utc.hour == 23):
-
                 current_slot = f"{now_utc.date()}_{now_utc.hour}"
 
-                # [핵심 수정] 이미 실행된 슬롯이라면, check_entry로 넘어가지 않고 대기해야 함
+                # 이미 이번 타임 청산을 완료했다면, 추가 청산 없이 대기만 함
                 if bot_state["last_close_slot"] == current_slot:
-                    # 휴식 시간이 끝날 때까지 10초씩 대기 (매매 진입 방지)
-                    time.sleep(10)
+                    time.sleep(10) # 루프 과부하 방지
                     continue
 
-                # 아직 실행 안 된 슬롯이면 청산 진행
+                # 청산 실행
                 bot_state["last_close_slot"] = current_slot
-
                 close_all_positions(reason="Timeframe End")
                 telegram_notifier.send_telegram_message("💤 <b>휴식</b> 다음 봉 시작까지 대기...")
                 
-                # 10분 대기
+                # 10분+알파 대기 (다음 봉 시작 12:00/00:00 넘길 때까지)
                 time.sleep(601) 
                 
-                # 대기 후 새 타임프레임 시작
                 time.sleep(5) 
                 update_targets(is_restart=False) 
             
             else:
-                # 휴식 시간이 아닐 때만 진입 로직 수행
+                # 평상시: 진입 감시
                 check_entry()
                 time.sleep(1)
             
