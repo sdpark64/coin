@@ -1,9 +1,5 @@
-2026-02-16 20:15:33,578 [INFO] ✅ BTC/USDT 레버리지 2배 설정 완료
-2026-02-16 20:15:33,628 [INFO] ✅ ETH/USDT 레버리지 2배 설정 완료
-2026-02-16 20:15:33,677 [INFO] ✅ SOL/USDT 레버리지 2배 설정 완료
-2026-02-16 20:15:33,725 [INFO] ✅ XRP/USDT 레버리지 2배 설정 완료
-2026-02-16 20:15:33,858 [INFO] 📡 텔레그램 리스너 시작
-/home/ubuntu/coin/binance/coin_bot.py:157: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
-  now_utc = datetime.datetime.utcnow()
-/home/ubuntu/coin/binance/coin_bot.py:306: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
-  while datetime.datetime.utcnow() < next_start:
+2026-02-17 12:09:18,829 [INFO] ✅ BTC/USDT 레버리지 2배 설정 완료
+2026-02-17 12:09:18,879 [INFO] ✅ ETH/USDT 레버리지 2배 설정 완료
+2026-02-17 12:09:18,928 [INFO] ✅ SOL/USDT 레버리지 2배 설정 완료
+2026-02-17 12:09:18,988 [INFO] ✅ XRP/USDT 레버리지 2배 설정 완료
+2026-02-17 12:09:18,988 [INFO] 📡 텔레그램 리스너 시작
