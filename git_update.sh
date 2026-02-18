@@ -1,3 +1,3 @@
 git add .
-git commit -m "청산후 대기시간에 실행시 대기로직 수정, k수정"
+git commit -m "롱 전략으로 수정, 1d, k0.8"
 git push -u origin main

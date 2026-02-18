@@ -30,9 +30,9 @@ bot_state = {
     "temp_pause": False,        
     "period_capital": 0.0,      
     "positions": {sym: False for sym in config.SYMBOLS},
-    "targets": {sym: {"long": 0.0, "short": 0.0} for sym in config.SYMBOLS},
+    "targets": {sym: {"long": 0.0} for sym in config.SYMBOLS}, # short 삭제
     "last_update_id": 0,
-    "last_close_slot": None # [추가됨] 중복 청산 방지용 슬롯 키
+    "last_close_slot": None 
 }
 
 LOG_FILE = "trade_history.csv"
@@ -172,22 +172,18 @@ def send_status_report():
 # ===============================================================
 # [매매 로직]
 # ===============================================================
+
 def get_next_start_time():
     now_utc = datetime.datetime.now(timezone.utc)
+    # 오늘 자정(UTC 00:00) 기준
     base_date = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    candidates = [
-        base_date,
-        base_date.replace(hour=12),
-        base_date + datetime.timedelta(days=1),
-        (base_date + datetime.timedelta(days=1)).replace(hour=12)
-    ]
-    for t in sorted(candidates):
-        if t > now_utc: return t
-    return candidates[-1]
+    # 다음 날 자정
+    next_start = base_date + datetime.timedelta(days=1)
+    return next_start
 
 def update_targets(is_restart=False):
     if is_restart:
-        msg = "♻️ <b>[시스템 복구 모드]</b> 목표가를 재계산하고 매매를 재개합니다.\n"
+        msg = "♻️ <b>[시스템 복구 모드]</b> 롱 목표가를 재계산하고 매매를 재개합니다.\n"
     else:
         msg = "🎯 <b>[새로운 타임프레임 시작]</b>\n"
         bot_state["temp_pause"] = False
@@ -200,13 +196,16 @@ def update_targets(is_restart=False):
     for sym in config.SYMBOLS:
         try:
             ohlcv = binance.fetch_ohlcv(sym, timeframe=config.TIMEFRAME, limit=2)
+            # 변동성 계산 (전일 고가 - 전일 저가) * K
             rng = (ohlcv[-2][2] - ohlcv[-2][3]) * config.K_VALUE
+            
+            # 롱 타겟만 저장 (Short 제거)
             bot_state["targets"][sym] = {
-                "long": ohlcv[-1][1] + rng,
-                "short": ohlcv[-1][1] - rng
+                "long": ohlcv[-1][1] + rng
             }
-            msg += f"- {sym.split('/')[0]}: L {bot_state['targets'][sym]['long']:,.2f} / S {bot_state['targets'][sym]['short']:,.2f}\n"
-        except: pass
+            msg += f"- {sym.split('/')[0]}: Long Target {bot_state['targets'][sym]['long']:,.2f}\n"
+        except Exception as e:
+            logger.error(f"{sym} 타겟 계산 실패: {e}")
     
     telegram_notifier.send_telegram_message(msg)
     sync_positions()
@@ -215,19 +214,17 @@ def check_entry():
     if not bot_state["is_active"] or bot_state["temp_pause"]: return
 
     for sym in config.SYMBOLS:
+        # 이미 포지션이 있으면 스킵
         if bot_state["positions"][sym]: continue
 
         try:
             ticker = binance.fetch_ticker(sym)
             curr = ticker['last']
-            tg = bot_state["targets"][sym]
+            tg_long = bot_state["targets"][sym]['long']
             
-            enter_side = None
-            if curr > tg['long']: enter_side = "LONG"
-            elif curr < tg['short']: enter_side = "SHORT"
-
-            if enter_side:
-                # [안전장치] 중복 진입 방지 (먼지 잔고 고려)
+            # 롱 진입 조건만 확인
+            if curr > tg_long:
+                # [안전장치] 중복 진입 방지
                 is_duplicate = False
                 positions = binance.fetch_positions()
                 for p in positions:
@@ -239,10 +236,9 @@ def check_entry():
                             break
                 
                 if is_duplicate:
-                    logger.warning(f"⚠️ {sym} 중복 진입 방지됨 (이미 포지션 있음)")
                     continue
 
-                # 주문 로직
+                # 주문 수량 계산
                 bal = binance.fetch_balance()
                 free_usdt = bal['USDT']['free']
                 order_cost = bot_state["period_capital"]
@@ -252,17 +248,11 @@ def check_entry():
                 amount_usdt = order_cost * config.LEVERAGE
                 amount = binance.amount_to_precision(sym, amount_usdt / curr)
                 
-                if enter_side == "LONG":
-                    binance.create_market_buy_order(sym, amount)
-                    bot_state["positions"][sym] = "LONG"
-                    write_trade_log("BUY_LONG", sym, curr, amount)
-                    telegram_notifier.send_telegram_message(f"⚡ <b>[LONG 진입]</b> {sym} @ {curr}")
-                
-                elif enter_side == "SHORT":
-                    binance.create_market_sell_order(sym, amount)
-                    bot_state["positions"][sym] = "SHORT"
-                    write_trade_log("SELL_SHORT", sym, curr, amount)
-                    telegram_notifier.send_telegram_message(f"📉 <b>[SHORT 진입]</b> {sym} @ {curr}")
+                # 시장가 매수 주문
+                binance.create_market_buy_order(sym, amount)
+                bot_state["positions"][sym] = "LONG"
+                write_trade_log("BUY_LONG", sym, curr, amount)
+                telegram_notifier.send_telegram_message(f"⚡ <b>[LONG 진입]</b> {sym} @ {curr}")
 
         except Exception as e:
             logger.error(f"{sym} 진입 에러: {e}")
@@ -312,10 +302,10 @@ def main():
     now_utc = datetime.datetime.now(timezone.utc)
     is_break_time = False
     
-    # 11:50~11:59 또는 23:50~23:59 인지 확인
-    if now_utc.minute >= 50 and (now_utc.hour % 12 == 11):
+    # UTC 23:50 ~ 23:59 (일봉 마감 10분 전) 인지 확인
+    if now_utc.hour == 23 and now_utc.minute >= 50:
         is_break_time = True
-
+    
     # [2] 분기 처리
     if is_break_time:
         # (A) 휴식 시간에 켜졌다면: 아무것도 안 하고 청산 후 대기
@@ -335,7 +325,7 @@ def main():
         while datetime.datetime.now(timezone.utc) < next_start:
             time.sleep(1)
             
-        time.sleep(5) # 캔들 생성 대기
+        time.sleep(10) # 캔들 생성 대기
         telegram_notifier.send_telegram_message("🚀 <b>새로운 타임프레임 시작!</b>")
         update_targets(is_restart=False)
 
@@ -349,8 +339,8 @@ def main():
         try:
             now_utc = datetime.datetime.now(timezone.utc)
             
-            # 50분 ~ 59분 사이: 휴식 및 청산 로직
-            if now_utc.minute >= 50 and (now_utc.hour == 11 or now_utc.hour == 23):
+            # UTC 23:50 ~ 23:59 사이: 휴식 및 청산 로직
+            if now_utc.hour == 23 and now_utc.minute >= 50:
                 current_slot = f"{now_utc.date()}_{now_utc.hour}"
 
                 # 이미 이번 타임 청산을 완료했다면, 추가 청산 없이 대기만 함
@@ -366,7 +356,7 @@ def main():
                 # 10분+알파 대기 (다음 봉 시작 12:00/00:00 넘길 때까지)
                 time.sleep(601) 
                 
-                time.sleep(5) 
+                time.sleep(10) 
                 update_targets(is_restart=False) 
             
             else:
