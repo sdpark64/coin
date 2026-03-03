@@ -14,9 +14,20 @@ from datetime import timezone
 # ===============================================================
 # [초기 설정]
 # ===============================================================
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 
+# 1. 표준 출력 핸들러 (터미널 및 > output.log 명령어로 전달됨)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+
+# 2. 파일 직접 저장 핸들러 (코드에서 직접 output.log에 기록)
+# 백그라운드 실행 시 파일 쓰기 지연을 방지하기 위해 사용합니다.
+file_handler = logging.FileHandler('output.log', encoding='utf-8')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 binance = ccxt.binance({
     'apiKey': config.BINANCE_API_KEY,
     'secret': config.BINANCE_SECRET,
@@ -103,7 +114,11 @@ def telegram_listener():
                     if str(update["message"]["chat"]["id"]) == str(config.TELEGRAM_CHAT_ID):
                         handle_command(text)
             time.sleep(1)
-        except: time.sleep(1)
+        except Exception as e:
+            # 에러 발생 시 파일에 로그를 반드시 기록하도록 수정
+            logger.error(f"❌ 텔레그램 리스너 오류: {e}")
+            logger.error(traceback.format_exc()) # 상세 에러 스택 기록
+            time.sleep(5) # 에러 시 잠시 대기
 
 def handle_command(command):
     if command.lower() in ["/info", "info"]:
@@ -148,9 +163,13 @@ def send_status_report():
                     leverage = int(float(raw_leverage))
                 
                 notional = float(p.get('notional', 0))
-                margin = abs(notional) / leverage if leverage > 0 else 0
-                roi = (pnl / margin) * 100 if margin > 0 else 0
                 
+                if leverage > 0 and abs(notional) > 0:
+                    margin = abs(notional) / leverage
+                    roi = (pnl / margin) * 100 if margin > 0 else 0
+                else:
+                    roi = 0.0 # 레버리지나 노셔널 값이 비정상일 때 대비
+
                 total_pnl += pnl
                 icon = "🔴" if pnl < 0 else "🟢"
                 pos_msg += f"{icon} <b>{sym.split('/')[0]}</b> ({side}): <code>${pnl:+.2f}</code> (<code>{roi:+.1f}%</code>)\n"
@@ -370,3 +389,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
